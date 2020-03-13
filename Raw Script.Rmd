@@ -30,6 +30,6 @@ print("Welcome to R-programming Arena")
 Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
 
 ```{python, echo = T}
-print("Welcome to Python-programming Arena, Professor Mousumi") 
+print("Welcome to Python-programming Arena, Professor Mousumi & Tim") 
 ```
 
