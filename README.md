@@ -1,5 +1,5 @@
-# Kaggle_EDA_Competition
+# Kaggle Exploratory Data Analysis Competition (NCAA)
 
-As discussed in the first zoom meeting held earlier today, kindly endeavor to peruse others code while keeping the big picture in mind - telling a story with data.
-You can hit the ground running by contributing to the repository. Please be kind enough to not write in esoteric ways. Adding comments to each module makes
-collaboration easier and fun.
+This project is about the exploratory data analysis competition hosted by the National Collegiate Athletic Association (NCAA), popularly termed March Madness. It is centered around telling a data story about college basketball through a combination of both narrative text and data exploration. The scope of this project is limited to the female college basketball teams only!
+
+Sit back and enjoy the ride>>>
