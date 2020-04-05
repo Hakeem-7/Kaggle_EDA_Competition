@@ -1,0 +1,1130 @@
+---
+title: "Women NCAA EDA"
+author: "Akeem Ajede"
+date: "3/24/2020"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+
+The dataset of interest is the female NCAA dataset. The reason for exploring this particular dataset is that less attention is paid to the female team in sports in general, so this is a sincere effort at changing the narrative. A lot of credit goes to Jason Zivkovic for the some of the code adopted in this data exploration.
+
+The first step is to set up the generic theme for this data exploration.
+
+```{r Theme}
+library(tidyverse)
+library(scales)
+library(gridExtra)
+library(knitr)
+#install.packages("ggExtra")
+library(ggExtra)
+library(ggplot2)
+
+# set up plotting theme
+theme_akeem <- function(legend_pos="top", base_size=11, font=NA){
+  
+  # come up with some default text details
+  txt <- element_text(size = base_size+3, colour = "black", face = "plain")
+  bold_txt <- element_text(size = base_size+3, colour = "black", face = "bold")
+  
+  # use the theme_minimal() theme as a baseline
+  theme_minimal(base_size = base_size, base_family = font)+
+    theme(text = txt,
+          # axis title and text
+          axis.title.x = element_text(size = 15, hjust = 1),
+          axis.title.y = element_text(size = 15),
+          # gridlines on plot
+          panel.grid.major = element_line(linetype = 2),
+          panel.grid.minor = element_line(linetype = 2),
+          # title and subtitle text
+          plot.title = element_text(size = 18, colour = "grey25", face = "bold"),
+          plot.subtitle = element_text(size = 16, colour = "grey44"),
+          
+          ###### clean up!
+          legend.key = element_blank(),
+          # the strip.* arguments are for faceted plots
+          strip.background = element_blank(),
+          strip.text = element_text(face = "bold", size = 13, colour = "grey35")) +
+    
+    #----- AXIS -----#
+    theme(
+      #### remove Tick marks
+      axis.ticks=element_blank(),
+      
+      ### legend depends on argument in function and no title
+      legend.position = legend_pos,
+      legend.title = element_blank(),
+      legend.background = element_rect(fill = NULL, size = 0.5,linetype = 2)
+      
+      
+    )
+}
+
+
+plot_cols <- c("#498972", "#3E8193", "#BC6E2E", "#A09D3C", "#E06E77", "#7589BC", "#A57BAF", "#4D4D4D") 
+```
+
+
+
+## Offloading the "Women NCAA" datasets.
+
+```{r Dataset}
+
+#Load the data
+
+reg_season_stats <- as.tibble(read.csv("march-madness-analytics-2020/2020DataFiles/2020-Womens-Data/WDataFiles_Stage1/WRegularSeasonDetailedResults.csv",
+                                       stringsAsFactors = F))
+
+tourney_stats <- as.tibble(read.csv("march-madness-analytics-2020/2020DataFiles/2020-Womens-Data/WDataFiles_Stage1/WNCAATourneyDetailedResults.csv",
+                          stringsAsFactors = F))
+teams <- as.tibble(read.csv("march-madness-analytics-2020/2020DataFiles/2020-Womens-Data/WDataFiles_Stage1/WTeams.csv", stringsAsFactors = F))
+
+tourney_stats_compact <- read.csv("march-madness-analytics-2020/2020DataFiles/2020-Womens-Data/WDataFiles_Stage1/WNCAATourneyCompactResults.csv", stringsAsFactors = F)
+tourney_seeds <- as.tibble(read.csv("march-madness-analytics-2020/2020DataFiles/2020-Womens-Data/WDataFiles_Stage1/WNCAATourneySeeds.csv",
+                          stringsAsFactors = F)) %>%
+  drop_na(Seed)
+team_conferences <- as.tibble(read.csv("march-madness-analytics-2020/2020DataFiles/2020-Womens-Data/WDataFiles_Stage1/WTeamConferences.csv",
+                                       stringsAsFactors = F))
+conferences <- as.tibble(read.csv("march-madness-analytics-2020/2020DataFiles/2020-Womens-Data/WDataFiles_Stage1/Conferences.csv",
+                                  stringsAsFactors = F))
+players <- read.csv("march-madness-analytics-2020/2020DataFiles/2020-Womens-Data/WPlayers.csv",
+                     stringsAsFactors = F, na.strings = c("", "NA")) %>% 
+  filter(!is.na(LastName)) %>%
+  as.tibble()
+  
+
+glimpse(players)
+```
+
+
+
+## Play_by_play analysis 
+
+This section involves a logical data wrangling. Specifically, the algorithm was written to loop through the women dataset and set the tune on how the data will be explored at the granular level.
+
+```{r Play_by_Play Analysis}
+play_by_play <- data.frame()
+
+# loop through each seasons PlayByPlay folders and read in in the play by play files
+for(each in list.files("march-madness-analytics-2020/2020DataFiles/2020-Womens-Data/")[str_detect(list.files("march-madness-analytics-2020/2020DataFiles/2020-Womens-Data/"), "WEvents")]) {
+  df <- read_csv(paste0("march-madness-analytics-2020/2020DataFiles/2020-Womens-Data/", each))
+  
+  
+  # Grouped shooting variables ----------------------------------------------
+  # there are some shooting variables that can probably be condensed - tip ins and dunks
+  paint_attempts_made <- c("made2_dunk", "made2_lay", "made2_tip") 
+  paint_attempts_missed <- c("miss2_dunk", "miss2_lay", "miss2_tip") 
+  paint_attempts <- c(paint_attempts_made, paint_attempts_missed)
+  
+  # create variables for field goals made (FGM), and also field goals attempted (FGA)(which includes the sum of FGs made and FGs missed)
+  FGM <- c("made2_dunk", "made2_jump", "made2_lay",  "made2_tip",  "made3_jump")
+  FGA <- c(FGM, "miss2_dunk", "miss2_jump" ,"miss2_lay",  "miss2_tip",  "miss3_jump")
+  # variable for three-pointers
+  ThreePointer <- c("made3_jump", "miss3_jump")
+  #  Two point jumper
+  TwoPointJump <- c("miss2_jump", "made2_jump")
+  # Free Throws
+  FT <- c("miss1_free", "made1_free")
+  # all shots
+  AllShots <- c(FGA, FT)
+  
+  
+  # Feature Engineering -----------------------------------------------------
+  # paste the two even variables together for FGs as this is the format for last years comp data
+  df <- df %>%
+    mutate_if(is.factor, as.character) %>% 
+    mutate(EventType = ifelse(str_detect(EventType, "miss") | str_detect(EventType, "made") | str_detect(EventType, "reb"), paste0(EventType, "_", EventSubType), EventType))
+  
+  # change the unknown for 3s to "jump" and for FTs "free"
+  df <- df %>% 
+    mutate(EventType = ifelse(str_detect(EventType, "3"), str_replace(EventType, "_unk", "_jump"), EventType),
+           EventType = ifelse(str_detect(EventType, "1"), str_replace(EventType, "_unk", "_free"), EventType))
+  
+  
+  df <- df %>% 
+    # create a variable in the df for whether the attempts was made or missed
+    mutate(shot_outcome = ifelse(grepl("made", EventType), "Made", ifelse(grepl("miss", EventType), "Missed", NA))) %>%
+    # identify if the action was a field goal, then group it into the attempt types set earlier
+    mutate(FGVariable = ifelse(EventType %in% FGA, "Yes", "No"),
+           AttemptType = ifelse(EventType %in% paint_attempts, "PaintPoints", 
+                                ifelse(EventType %in% ThreePointer, "ThreePointJumper", 
+                                       ifelse(EventType %in% TwoPointJump, "TwoPointJumper", 
+                                              ifelse(EventType %in% FT, "FreeThrow", "NoAttempt")))))
+  
+  
+  # Rework DF so only shots are included and whatever lead to the shot --------
+  df <- df %>% 
+    mutate(GameID = paste(Season, DayNum, WTeamID, LTeamID, sep = "_")) %>% 
+    group_by(GameID, ElapsedSeconds) %>% 
+    mutate(EventType2 = lead(EventType),
+           EventPlayerID2 = lead(EventPlayerID)) %>% ungroup()
+  
+  
+  df <- df %>% 
+    mutate(FGVariableAny = ifelse(EventType %in% FGA | EventType2 %in% FGA, "Yes", "No")) %>% 
+    filter(FGVariableAny == "Yes") 
+  
+  
+  # create a variable for if the shot was made, but then the second event was also a made shot
+  df <- df %>% 
+    mutate(Alert = ifelse(EventType %in% FGM & EventType2 %in% FGM, "Alert", "OK")) %>% 
+    # only keep "OK" observations
+    filter(Alert == "OK") 
+  # replace NAs with something
+  df$EventType2[is.na(df$EventType2)] <- "no_second_event"
+  
+  
+  # create a variable for if there was an assist on the FGM:
+  df <- df %>% 
+    mutate(AssistedFGM = ifelse(EventType %in% FGM & EventType2 == "assist", "Assisted", 
+                                ifelse(EventType %in% FGM & EventType2 != "assist", "Solo", 
+                                       ifelse(EventType %in% FGM & EventType2 == "no_second_event", "Solo", "None"))))
+  
+  # # because the FGA could be either in `EventType` (more likely) or `EventType2` (less likely), need
+  # # one variable to indicate the shot type
+  # df <- df %>% \
+  #   mutate(fg_type = ifelse(EventType %in% FGA, EventType, ifelse(EventType2 %in% FGA, EventType2, "Unknown")))
+  
+  # create final output
+  df <- df %>% ungroup()
+  play_by_play <- bind_rows(play_by_play, df)
+  
+  rm(df);gc() #remove garbage content
+}
+
+#saveRDS(play_by_play, "play_by_play15_19.rds")
+# play_by_play <- readRDS("play_by_play2015_19.rds")
+
+```
+
+
+## Scoring patterns of the play-by-play analysis over the years
+
+Overall, the field goal (FG) % was 39.56 on 3,078,936 attempts. Suprisingly, tries on "threes" were only 1.3% less successful than 2-point jumpers, yet the potential payoff is 50% (3/2 x 100) more points for taking the three. That explains the clamor for a shift to threes and shots at the rim.
+
+```{r Scoring Pattern}
+play_by_play %>%
+  filter(Season == 2019) %>%
+  as.tibble()    #2019 data
+
+library(DT)
+#PlaybyPlay seasons range from 2015 to 2019
+summary(play_by_play$Season) 
+
+#Sum of field goals made and missed from 2015 to 2019
+play_by_play %>%
+  group_by(shot_outcome) %>% 
+  summarise(number_of_shots = n()) %>%
+  arrange(desc(number_of_shots)) 
+
+
+# Sum of field goals made (FGM) in 2019
+filter(play_by_play, play_by_play$Season == 2019) %>%
+  group_by(shot_outcome) %>% 
+  summarise(number_of_shots = n()) %>%
+  arrange(desc(number_of_shots)) 
+
+## Morey Ball in the NCAA
+
+play_by_play %>%
+  group_by(AttemptType) %>% 
+  summarise(number_of_shots = n()) %>%
+  arrange(desc(number_of_shots)) %>%
+  DT::datatable()         # Shots in descending order
+
+ 
+# Scoring patterns
+play_by_play %>% 
+  group_by(AttemptType) %>% 
+  summarise(number_of_shots = n()) %>%
+  filter(AttemptType != "NoAttempt") %>% 
+  ggplot(aes(x= AttemptType, y= number_of_shots)) +
+  geom_col(fill = plot_cols[1], colour = "grey") +
+  geom_text(aes(label = comma(number_of_shots)), y=90000, colour = "black", size = 6) +
+  scale_y_continuous(labels = c("0", "300,000", "600,000", "900,000", "1,200,000\nattempts")) +
+  coord_flip() +
+  ggtitle("Scoring Patterns in The Female NCAA", subtitle = ">Three Pointers are closing up on the Two Pointers<") +
+  theme_akeem() +
+  theme(axis.title.x = element_blank(), axis.title.y = element_blank(), plot.title = element_text(hjust = 0.5), plot.subtitle = element_text(hjust = 0.5))  
+
+
+
+## Scoring pattern trend over the years
+p_tab <- play_by_play %>% 
+  filter(AttemptType != "FreeThrow") %>% 
+  group_by(AttemptType, Season) %>% 
+  summarise(n_shots = n()) %>% 
+  filter(AttemptType != "NoAttempt") %>%
+  filter(Season == 2019) %>% ungroup()
+
+
+play_by_play %>% 
+  filter(AttemptType != "FreeThrow") %>% 
+  group_by(AttemptType, Season) %>% 
+  summarise(n_shots = n()) %>% 
+  filter(AttemptType != "NoAttempt") %>% 
+  ggplot(aes(x= Season, y= n_shots, colour = AttemptType, group = AttemptType)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  geom_text(data = p_tab, aes(label = AttemptType), hjust= 0, size=6) +
+  scale_color_manual(values = plot_cols) +
+  scale_x_continuous(labels = c(2015:2020), breaks = c(2015:2020), limits = c(2015, 2022)) +
+  scale_y_continuous(labels = c("125,000", "150,000", "175,000", "200,000", "225,000", "250,000 attempts"), breaks = c(seq(from=125000, to= 250000, by= 25000)), limits = c(125000, 250000)) +
+  ggtitle("3_points Jumper Popularity Rises While 2_Points Jumper Diminishes") +
+  theme_akeem(legend_pos = "none") +
+  theme(panel.grid.major.x = element_blank(), panel.grid.minor.x = element_blank(), axis.title.x = element_blank(), axis.title.y = element_blank())
+
+# Three points jumper rose over the years
+#install.packages("DT") - Javascript in R
+
+play_by_play %>% 
+  filter(FGVariable == "Yes") %>%
+  group_by(AttemptType, shot_outcome) %>% 
+  summarise(n_attempts = n()) %>% 
+  mutate(shot_success = percent(n_attempts / sum(n_attempts))) %>% 
+  filter(shot_outcome == "Made") %>% select(-shot_outcome) %>% 
+  DT::datatable()
+
+#Graphical illustration of shot_success_percentage by attempt type
+
+play_by_play %>% 
+  filter(FGVariable == "Yes") %>%
+  group_by(AttemptType, shot_outcome) %>% 
+  summarise(n_attempts = n()) %>% 
+  mutate(shot_success = percent(n_attempts / sum(n_attempts))) %>% 
+  filter(shot_outcome == "Made") %>% 
+  ggplot(aes(x = AttemptType , y = shot_success))+
+  geom_bar(stat = "identity")+  #identity was the winning strategy, lol
+  coord_flip() +
+  theme_akeem(legend_pos = "none") +
+  theme(panel.grid.major.x = element_blank(), panel.grid.minor.x = element_blank(), axis.title.x = element_blank(), axis.title.y = element_blank())
+
+
+
+
+
+play_by_play %>% 
+  filter(FGVariable == "Yes") %>%
+  group_by(AttemptType, shot_outcome) %>% 
+  summarise(n_attempts = n()) %>% 
+  mutate(shot_failure = percent(n_attempts / sum(n_attempts))) %>% 
+  filter(shot_outcome == "Missed") %>% select(-shot_outcome) %>% #shot outcome is redundant in the dataset
+  DT::datatable()
+
+#Graphical illustration of shot_failure_percentage by attempt type
+
+play_by_play %>% 
+  filter(FGVariable == "Yes") %>%
+  group_by(AttemptType, shot_outcome) %>% 
+  summarise(n_attempts = n()) %>% 
+  mutate(shot_failure = percent(n_attempts / sum(n_attempts))) %>% 
+  filter(shot_outcome == "Missed") %>% 
+  ggplot(aes(x = AttemptType , y = shot_failure))+
+  geom_bar(stat = "identity")+  #identity was the winning strategy, lol
+  coord_flip()
+  
+
+# Overall, the FG % was 39.56 on 3,078,936 attempts...
+# Suprisingly, tries on threes were only 1.3% less successful than 2-point jumpers, yet the potential payoff is 50% more points 
+# for taking the three. That’s what the stat heads keep banging on about as the reason for the shift to threes and shots at the rim.
+```
+
+
+
+
+
+## Expected points from each scoring pattern
+
+The data suggested that the ladies sparingly made an attempt at a 2-pointer dunk. The table suggested that a 2_tip is by far the most successful strategy. It’s pretty obvious to see why basketball analytics junkies are always screaming at players to stop shooting jumpers from inside the three point line - these shot types have an expected 0.67 (.334 x 2) points per attempt, which is considerably less than the expected 0.95 (.315 x 3) points for attempted shots outside the three-points line.
+
+```{r Expected points}
+## Expected points
+glimpse(play_by_play)
+
+shot_values <- play_by_play %>% 
+  filter(FGVariable == "Yes") %>% 
+  mutate(EventType = str_remove(EventType, "made"), EventType = str_remove(EventType, "miss")) %>% 
+  group_by(EventType, shot_outcome) %>% 
+  summarise(n_attempts = n()) %>% 
+  mutate(shot_success = n_attempts / sum(n_attempts),
+         n_attempts = sum(n_attempts)) %>% 
+  filter(shot_outcome == "Made") %>% select(-shot_outcome) 
+
+shot_values %>% 
+  mutate(n_attempts = comma(n_attempts),
+         shot_success = percent(shot_success)) %>% 
+  rename('No_of_Attempts' = n_attempts)%>%
+  DT::datatable()
+
+# The data suggested that the ladies sparingly made an attempt at a 2-pointer dunk. The table suggested that a 2_tip is by far the
+# most successful strategy. It’s pretty obvious to see why basketball analytics junkies are screaming from the rooftops for players 
+# to stop shooting jumpers from inside the three point line - these shot types have an expected 0.67 (.334 x 2) points per attempt… 
+# considerably less than the expected 0.95 (.315 x 3) points for attempted shots outside the three-points line.
+
+shot_values %>% 
+  mutate(Point = as.numeric(str_extract(EventType, "[[:digit:]]"))) %>% 
+  mutate(ExpectedPoints = shot_success * Point) %>% 
+  ggplot(aes(x=reorder(EventType, ExpectedPoints), y= ExpectedPoints)) +
+  geom_col(fill = plot_cols[1], colour = "grey") +
+  geom_text(aes(label = round(ExpectedPoints, 2)), vjust =  1.2, colour = "white", size=6) +
+  ggtitle("TWO POINT JUMPERS: LEAST EFFICIENT SHOT TYPE", subtitle = "Tips yielded a massive 1.23 points per attempt,\nwhile 2-point jumpers yielded approx. half")+
+  theme_akeem() +
+  theme(panel.grid.major.x = element_blank(), panel.grid.minor.x = element_blank(), axis.title.x = element_blank(), axis.title.y = element_blank())
+
+```
+
+
+## Assists Vs Solo Attempts 
+
+The graph summarises the entire information on solo (hero) ball attempt by the ladies. Successful solo  three-points attempt forms the least proportion of unassisted field goals. 
+
+```{r}
+play_by_play %>% 
+  filter(AssistedFGM != "None", shot_outcome == "Made") %>% 
+  group_by(EventType, AssistedFGM) %>% 
+  summarise(n = n()) %>% 
+  mutate(perc = n / sum(n)) %>% 
+  filter(AssistedFGM == "Solo") %>% 
+  ggplot(aes(x=EventType, y= perc, fill = AssistedFGM)) +
+  geom_hline(yintercept = mean(play_by_play$AssistedFGM[play_by_play$AssistedFGM != "None"] == "Solo"), linetype = 2) +
+  geom_col(fill = plot_cols[2], colour = "grey") +
+  geom_text(aes(label = ifelse(AssistedFGM == "Solo", percent(perc), "")), hjust = 1.2, colour = "white", size=6) +
+  scale_y_continuous(labels = c("0%", "25%", "50%", "75%", "100% solo")) +
+  annotate("text", x=5, y= 0.56, label = paste0(percent(mean(play_by_play$AssistedFGM[play_by_play$AssistedFGM != "None"] == "Solo")), " solo\nattempts overall"), size = 6) +
+  coord_flip() +
+  ggtitle("HERO BALL MORE FREQUENT FOR SOME SHOTS", subtitle = "Solo 2pt jump shots are much more frequent that 3pt jumpers") +
+  theme_akeem(legend_pos = "none") +
+  theme(axis.title.x = element_blank(), axis.title.y = element_blank())
+
+```
+
+
+To delve deeper into the evolution of hero balls patterns over the years, the trend of successful solo field goals types over the years was explored and the result is as illustrated in the plot below.
+
+The solo ball attempt trend presented interesting outcomes. First, a zig-zag scoring pattern was observed in the "dunk" hero balls. The solo "dunk" hero balls rose from 40% in 2015 to 100% in 2016, then fell sharply to approximately 33% in 2017, then rose again to 100% in 2019. The other hero ball types were almost consistent over the years, except the three-point hero balls that slightly rose by 3% between the 2018 and 2019 season.
+
+```{r}
+solo_tab <- play_by_play %>% 
+  filter(AssistedFGM != "None") %>% 
+  group_by(Season, EventType, AssistedFGM) %>% 
+  summarise(n = n()) %>% 
+  mutate(perc = n / sum(n)) %>% 
+  filter(AssistedFGM == "Solo") %>%
+  filter(Season == 2019) %>% ungroup()
+
+
+play_by_play %>% 
+  filter(AssistedFGM != "None") %>% 
+  group_by(Season, EventType, AssistedFGM) %>% 
+  summarise(n = n()) %>% 
+  mutate(perc = n / sum(n)) %>% 
+  filter(AssistedFGM == "Solo") %>% 
+  ggplot(aes(x= Season, y= perc, colour = EventType)) +
+  geom_line(size= 1) +
+  geom_point(size = 2) +
+  geom_text(data = solo_tab, aes(label = EventType), hjust= 0, size=6) +
+  scale_color_manual(values = plot_cols) +
+  scale_x_continuous(labels = c(2015:2020), breaks = c(2015:2020), limits = c(2015, 2022)) +
+  scale_y_continuous(labels = c("0%", "10%", "20%", "30%", "40%", "50%", "60%", "70%", "80%", "90%", "100% Solo"),
+                     breaks = c(seq(0,1, .1)),
+                     limits = c(0,1)) +
+  ggtitle("Hero Ball Evolution") +
+  theme_akeem(legend_pos = "none")
+```
+
+
+## Teamwork Or Personal Glory
+
+The average proportion of teams in favor of solo attempts is approximately 45%. The solo field goals across the teams follows a normal distribution, with all teams lying between 26% and 60%.
+
+Next is a quick peak of top 12 teams deploying solo attempt strategy;
+
+```{r}
+play_by_play %>% 
+  filter(AssistedFGM != "None") %>% 
+  group_by(EventTeamID, AssistedFGM) %>% 
+  summarise(n = n()) %>% 
+  mutate(perc = n / sum(n)) %>% 
+  filter(AssistedFGM == "Solo") %>% arrange(desc(perc)) %>%
+  ggplot(aes(x= perc)) +
+  geom_histogram(fill = plot_cols[1], colour = "grey") +
+  scale_x_continuous(labels = c("20%","30%", "40%", "50%", "60% solo", ""), limits = c(0.2, 0.7)) +
+  labs(y= "Number of Teams") +
+  ggtitle("Solo Field Goal Distribution") +
+  theme_akeem() +
+  theme(axis.title.x = element_blank(), plot.title = element_text(hjust = 0.5))
+```
+
+
+The table generated from the data suggested that the top 12 teams utilizing the solo ball technique are not the traditional bigwigs in female basketball college team.
+
+```{r}
+play_by_play %>% 
+  filter(AssistedFGM != "None") %>% 
+  group_by(EventTeamID, AssistedFGM) %>% 
+  summarise(n = n()) %>% 
+  mutate(perc = n / sum(n)) %>% 
+  filter(AssistedFGM == "Solo") %>% ungroup() %>% 
+  left_join(teams %>% select(TeamID, TeamName), by = c("EventTeamID" = "TeamID")) %>% arrange(desc(perc)) %>% 
+  select(TeamName, PercentSolo = perc) %>% 
+  mutate(PercentSolo = percent(PercentSolo)) %>% head(12) %>% 
+  DT::datatable()
+```
+
+
+Conversely, top female college basketball teams like Iowa and Connecticut are not disposed to solo attempts, or aptly put, personal glory.
+
+```{r}
+play_by_play %>% 
+  filter(AssistedFGM != "None") %>% 
+  group_by(EventTeamID, AssistedFGM) %>% 
+  summarise(n = n()) %>% 
+  mutate(perc = n / sum(n)) %>% 
+  filter(AssistedFGM == "Solo") %>% ungroup() %>% 
+  left_join(teams %>% select(TeamID, TeamName), by = c("EventTeamID" = "TeamID")) %>% arrange(perc) %>% 
+  select(TeamName, PercentSolo = perc) %>% 
+  mutate(PercentSolo = percent(PercentSolo)) %>% head(12) %>% 
+  DT::datatable()
+```
+
+
+
+## Teamwork or Personal Glory: A Player Perspective
+
+EventPlayerID is a column of interest in the play- by -play data frame created at the outset of the analysis. A quick view of the column revealed rows containing "zero" value. This could could either be a random error, or an impute value for missing data. Since the missing records form just 0.2% (6780/3135775 x 100) of the entire column data, they were excluded from the analysis. 
+
+```{r}
+
+summary(play_by_play$EventPlayerID) # Zero is an indication of an error in the input data or a misssing value
+sum(play_by_play$EventPlayerID == 0) #6780 likely missing data
+
+shot_attempts <- play_by_play %>% 
+  filter(EventPlayerID != 0 | EventPlayerID2 != 0 | EventPlayerID2 != "NA" ) %>% # Missing records exclusion
+  filter(FGVariable == "Yes") %>% 
+  group_by(EventPlayerID) %>% 
+  summarise(n_attempts = n(),
+            n_games = n_distinct(GameID),
+            n_seasons = n_distinct(Season)) %>% ungroup() %>%
+  mutate(avg_attempts = n_attempts / n_games) %>% 
+  arrange(desc(n_attempts)) %>% 
+  left_join(players, by = c("EventPlayerID" = "PlayerID")) %>% 
+  mutate(TeamID = as.integer(TeamID)) %>% 
+  left_join(teams %>% select(TeamID, TeamName), by = "TeamID")
+
+```
+
+
+
+On the average, players made 278 shots since the 2015 season. However, if every player started their career in 2015 and played from 2015 - 2019, then the average shot attempts would naturally be higher.
+
+```{r}
+shot_attempts %>%
+  ggplot(aes(x= n_attempts)) +
+  geom_histogram(fill = plot_cols[1], colour = "grey") +
+  geom_vline(xintercept = mean(shot_attempts$n_attempts), linetype = 2) +
+  annotate("text", x=600, y= 1600, label = paste0("Average player\ntook ", round(mean(shot_attempts$n_attempts)), " shots"), colour = "blue", size = 5) +
+  labs(x= "Shot Attempts", y= "Number of players") +
+  scale_x_continuous(labels = comma) +
+  scale_y_continuous(labels = comma) +
+  ggtitle("SOME VOLUME SHOOTERS SINCE 2015") +
+  theme_akeem()
+
+```
+
+
+Exploring the shooting volume deeper, the highest 10 shot takers by volume from 2015 - 2019 is diplayed below. All players on the list, with the exception of Kelsey Plum played for the entire four seasons. As a Nigerian-American, it was a joy to see a compatriot - Arike Ogunbowale on the prestigious list. Arike's presence in the top 10 shot takers further reinforces the hypothesis that players whose college basketball career spanned the entire 4 seasons stood a better chance of being among the top shot takers. Arike's impressive record earned her draft pick for the Dallas Wings.
+
+```{r}
+shot_attempts %>% 
+  arrange(desc(n_attempts)) %>% head(10) %>% 
+  ggplot(aes(x= reorder(paste0(FirstName, " ", LastName), n_attempts), y= n_attempts)) +
+  geom_col(fill = plot_cols[1], colour = "grey") +
+  geom_text(aes(label = paste("(", n_seasons, " seasons)")), y=250, colour = "white") +
+  ggtitle("10 HIGHEST SHOT TAKERS") +
+  labs(y= "Number of attempts") +
+  coord_flip() +
+  theme_akeem() +
+  theme(axis.title.y = element_blank(), plot.title = element_text(hjust = 0.5))
+
+```
+
+Data can be deceptful if explored in a biased manner or through a myopic mindset. Hence, the top 10 shot takers was explored again by giving consideration to average shot attempts over the 4 seasons i.e. 2015 - 2019. As shown in the histogram below, the list is dominated by different college class except Senior year (4 years/seasons). This suggest that some promising talents are on their way to getting drafted after college. 
+
+```{r}
+
+shot_attempts %>% 
+  arrange(desc(avg_attempts)) %>% head(10) %>% 
+  ggplot(aes(x= reorder(paste0(FirstName, " ", LastName), avg_attempts), y= avg_attempts)) +
+  geom_col(fill = plot_cols[3], colour = "grey") +
+  geom_text(aes(label = paste("(", n_seasons, " seasons)")), y=3, colour = "white") +
+  ggtitle("10 HIGHEST AVERAGE SHOT TAKERS", subtitle = "Underclassmen dominate this list, with only two\n3 or 4 year players") +
+  labs(y= "Average attempts") +
+  coord_flip() +
+  theme_akeem() +
+  theme(axis.title.y = element_blank())
+
+
+```
+
+# What type of shots are the top players taking?
+
+Top players like Jess Kovatch and Kelsey Mitchell shots are mostly 3-point field goals, which explains why they made it to the top scorers list. Arike Ogunbowale's favorite shot type seems to be 2-point jump. Generally, the popular shot types among the the top 10 players are 2-point and 3-point jumps.
+
+```{r}
+
+top_10_fga <- shot_attempts %>% 
+  arrange(desc(n_attempts)) %>% head(10) %>% pull(EventPlayerID)
+
+
+# play_by_play %>%
+#   filter(EventPlayerID %in% top_20_avg_fga) %>%
+#   filter(FGVariable == "Yes") %>%
+#   select(EventPlayerID, EventType, shot_outcome, AttemptType, AssistedFGM) %>%
+#   left_join(players, by = c("EventPlayerID" = "PlayerID")) %>%
+#   group_by(EventPlayerID, FirstName, LastName, AttemptType) %>%
+#   summarise(n_attempts = n()) %>%
+#   mutate(perc_shots = n_attempts / sum(n_attempts)) %>%  ungroup() %>%
+#   ggplot(aes(x= paste0(FirstName, " ", LastName), y= AttemptType)) +
+#   geom_point(aes(size = perc_shots), colour = plot_cols[2]) +
+#   coord_flip() +
+#   theme_jason()
+
+play_by_play %>% 
+  filter(EventPlayerID %in% top_10_fga) %>% 
+  filter(FGVariable == "Yes") %>% 
+  select(GameID, EventPlayerID, EventType, shot_outcome, AttemptType, AssistedFGM) %>% 
+  left_join(players, by = c("EventPlayerID" = "PlayerID")) %>% 
+  group_by(GameID, EventPlayerID, FirstName, LastName, AttemptType) %>% 
+  summarise(n_attempts = n()) %>% 
+  mutate(perc_shots = n_attempts / sum(n_attempts)) %>%  ungroup() %>% 
+  ggplot(aes(x= AttemptType, y= n_attempts, fill = AttemptType)) +
+  geom_boxplot(colour = "grey") + 
+  scale_fill_manual(values = plot_cols[c(1,4,5)]) +
+  facet_wrap(~ paste0(FirstName, " ", LastName), scales = "free_y") +
+  ggtitle("WHERE DO THEIR SHOTS COME FROM?", subtitle = "The per game distribution of shot types by the top 10 shot takers") +
+  theme_akeem() +
+  theme(axis.text.x = element_blank(), axis.title.x = element_blank(), axis.title.y = element_blank())
+
+```
+
+
+# Unassisted Attempts
+
+The solo field goals chart showed that Kelsey Plum is the top unasssisted shot taker. What makes this information more interesting is that the record only accounted for three three (3) seasons of her college career. According to a wikipedia report, She enrolled at the University of Washington in 2014 and became the first overall pick in the 2017 Women National Basketball Association (WNBA) draft. Going by the chart, that did not come as a surprise.
+
+```{r}
+play_by_play %>% 
+  filter(EventPlayerID %in% top_10_fga) %>% 
+  filter(FGVariable == "Yes") %>% 
+  filter(AssistedFGM != "None") %>% 
+  select(GameID, EventPlayerID, EventType, shot_outcome, AttemptType, AssistedFGM) %>% 
+  left_join(players, by = c("EventPlayerID" = "PlayerID")) %>% 
+  group_by(EventPlayerID, FirstName, LastName, AssistedFGM) %>% 
+  summarise(n_attempts = n()) %>% 
+  mutate(perc_shots = n_attempts / sum(n_attempts)) %>%  ungroup() %>% 
+  filter(AssistedFGM == "Solo") %>% 
+  ggplot(aes(x= reorder(paste0(FirstName, " ", LastName),perc_shots), y= perc_shots)) +
+  geom_col(colour = plot_cols[8]) + 
+  geom_text(aes(label = percent(round(perc_shots, 2))), hjust=1) +
+  scale_y_continuous(limits = c(0,1.1)) +
+  coord_flip() +
+  ggtitle("Solo Field Goals Percentage \nby Top 10 Shot Takers") +
+  theme_akeem(legend_pos = "none") +
+  theme(axis.title.y = element_blank(), axis.title.x = element_blank(), axis.text.x = element_blank(), 
+        panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+
+
+```
+
+
+## NCAA Tournament Analysis
+
+The first section will be focused on exploring some high level analysis of the NCAA tournament over the last 34 seasons. Specifically, the top winners and the biggest bridesmaides of the tournament history.
+
+Additionally, the winning seed will be explored, same as the strong conferences.
+
+
+# Historical Top Winners and Runner-ups?
+
+Stats tells a bunch. Notre Dame has always being a force to reckon with in college female basketball. Same school produced the superstar Arike Ogunbowale!
+
+```{r}
+# Join team names to tourney compact dataset
+
+glimpse(tourney_stats_compact)
+glimpse(teams)
+tourney_stats_compact <- tourney_stats_compact %>%
+  left_join(teams, by = c("WTeamID" = "TeamID")) %>%
+  left_join(teams, by = c("LTeamID" = "TeamID"))
+ 
+
+tourney_stats_compact <- tourney_stats_compact %>%
+  rename(WTeamName = TeamName.x,
+         LTeamName = TeamName.y)
+
+tourney_stats_compact$season_day <- paste(tourney_stats_compact$Season, tourney_stats_compact$DayNum, sep = "_")
+
+# then create a feature to label the round of the tournament
+tourney_stats_compact <- tourney_stats_compact %>%
+  mutate(TourneyRound = ifelse(DayNum %in% c(136, 137), "First Round", ifelse(DayNum %in% c(138, 139), "Second Round", ifelse(DayNum %in% c(143, 144), "Sweet 16", ifelse(DayNum %in% c(145, 146), "Elite 8", ifelse(DayNum == 152, "Final Four", "Championship Game")))))) %>%
+  mutate(TourneyRound = factor(TourneyRound, levels = c("First Round", "Second Round", "Sweet 16", "Elite 8", "Final Four", "Championship Game")))
+
+ncaa_champs <- tourney_stats_compact %>%
+  group_by(Season) %>%
+  summarise(max_days = max(DayNum)) %>%
+  mutate(season_day = paste(Season, max_days, sep = "_")) %>%
+  left_join(tourney_stats_compact, by = "season_day") %>% ungroup() %>%
+  select(-Season.y) %>%
+  rename(Season = Season.x)
+
+win_plot <- ncaa_champs %>%
+  group_by(WTeamName) %>%
+  summarise(n = n()) %>%
+  ggplot(aes(x=reorder(WTeamName,n), y=n)) +
+  geom_bar(stat = "identity", fill = plot_cols[2], color = "grey") +
+  labs(title = "NOT HARD TO IDENTIFY POWER SCHOOLS", subtitle = "Most Tourney Wins \nsince 1985") +
+  coord_flip() +
+  theme_akeem() +
+  theme(axis.title.x = element_blank(), axis.title.y = element_blank())
+
+
+lose_plot <- ncaa_champs %>%
+  group_by(LTeamName) %>%
+  summarise(n = n()) %>%
+  ggplot(aes(x=reorder(LTeamName, n), y=n)) +
+  geom_bar(stat = "identity", fill = plot_cols[3], colour = "grey") +
+  labs(title = "", subtitle = "Most Tourney Runner-Ups \nsince 1985") +
+  coord_flip() +
+  theme_akeem() +
+  theme(axis.title.x = element_blank(), axis.title.y = element_blank())
+
+grid.arrange(win_plot, lose_plot, ncol = 2)
+
+
+```
+
+
+# Conferences with the most wins
+
+The Big East Conference and Southeastern Conference are the top two leading female college basketball conferences.
+
+```{r}
+ncaa_champs %>%
+  select(Season, TeamID = WTeamID) %>%
+  left_join(team_conferences, by = c("Season", "TeamID")) %>%
+  left_join(conferences, by = "ConfAbbrev") %>%
+  count(Description) %>%
+  ggplot(aes(x= reorder(Description, n), y= n)) +
+  geom_col(fill = plot_cols[2], color = "grey") +
+  geom_text(aes(label = n), hjust = 1, size = 6, color = "white") +
+  labs(title = "POWER CONFERENCES LEAD THE WAY", subtitle = "Conferences with the most titles since 1985") +
+  coord_flip() +
+  theme_akeem() +
+  theme(axis.title.x = element_blank(), axis.title.y = element_blank(), axis.text.x = element_blank()) 
+
+```
+
+
+# Seeds with the most titles
+
+The chart showed that seed one won most of the titles (18) over the years, followed closely by seed 2.
+```{r}
+
+tourney_seeds$Seed <- as.integer(str_extract_all(tourney_seeds$Seed, "[0-9]+"))
+
+glimpse(tourney_seeds)
+
+ncaa_champs %>%
+  select(Season, TeamID = WTeamID) %>%
+  left_join(tourney_seeds, by = c("Season", "TeamID")) %>%
+  count(Seed, sort = T) %>%
+  mutate(Seed = as.character(Seed)) %>%
+  ggplot(aes(x= reorder(Seed, n), y= n)) +
+  geom_segment(aes(x= Seed, xend = Seed, y= 0, yend = n), color = plot_cols[2], size = 1) +
+  geom_point(size = 4, color = plot_cols[3]) +
+  scale_y_continuous(labels = c("0", "5", "10", "15 Titles", "")) +
+  coord_flip() +
+  theme_akeem() +
+  theme(axis.title.x = element_blank(), axis.title.y = element_blank()) +
+  ggtitle("Seeds with the Most Titles")
+
+```
+
+
+## Averages Per Season
+
+This section is dedicated to analysing the average team stats per regular season. The individual team stats were first summarised for each season, then the average for each season was computed.
+
+
+```{r}
+
+## calculate possessions per game statistic: field goal attempts + 0.475 x free throw attempts - offensive rebounds + turnovers
+
+# regular season
+reg_season_stats <- reg_season_stats %>%
+  mutate(WPoss = WFGA + (WFTA * 0.475) + WTO - WOR,
+         LPoss = LFGA + (LFTA * 0.475) + LTO - LOR)
+
+
+# Tourney
+tourney_stats <- tourney_stats %>%
+  mutate(WPoss = WFGA + (WFTA * 0.475) + WTO - WOR,
+         LPoss = LFGA + (LFTA * 0.475) + LTO - LOR)
+
+
+#---------- tidy data for regular season totals ----------#
+
+# First I will define a function that will take the detailed results data and reshape it so that it results in a dataframe where 
+# each observation is a team for that season and their totals statistics for that season. It will also calculate the statistics allowed
+# for the season. This function only requires one parameter to be passed to it: either the regular season or Tourney detailed data.
+
+# IMPORTANT: #
+# The data required for this function to work is either the regular season or tourney detailed stats, and the "teams" dataset
+
+reshape_detailed_results <- function(detailed_dataset) {
+  
+  season_team_stats_tot <- rbind(
+    detailed_dataset %>%
+      select(Season, DayNum, TeamID=WTeamID, Score=WScore, OScore=LScore, WLoc, NumOT, Poss=WPoss, FGM=WFGM, FGA=WFGA, FGM3=WFGM3,  FGA3=WFGA3, FTM=WFTM, FTA=WFTA, OR=WOR,
+             DR=WDR, Ast=WAst, TO=WTO, Stl=WStl, Blk=WBlk, PF=WPF, OPoss=LPoss, OFGM=LFGM, OFGA=LFGA, OFGM3=LFGM3, OFGA3=LFGA3, OFTM=LFTM, OFTA=LFTA, O_OR=LOR, ODR=LDR,
+             OAst=LAst, OTO=LTO, OStl=LStl, OBlk=LBlk, OPF=LPF) %>%
+      mutate(Winner=1),
+    
+    detailed_dataset %>%
+      select(Season, DayNum, TeamID=LTeamID, Score=LScore, OScore=WScore, WLoc, NumOT, Poss=LPoss, FGM=LFGM, FGA=LFGA, FGM3=LFGM3,  FGA3=LFGA3, FTM=LFTM, FTA=LFTA, OR=LOR,
+             DR=LDR, Ast=LAst, TO=LTO, Stl=LStl, Blk=LBlk, PF=LPF, OPoss=WPoss, OFGM=WFGM, OFGA=WFGA, OFGM3=WFGM3, OFGA3=WFGA3, OFTM=WFTM, OFTA=WFTA, O_OR=WOR, ODR=WDR,
+             OAst=WAst, OTO=WTO, OStl=WStl, OBlk=WBlk, OPF=WPF) %>%
+      mutate(Winner=0)) %>%
+    group_by(Season, TeamID) %>%
+    summarise(GP = n(),
+              wins = sum(Winner),
+              TotPoints = sum(Score),
+              TotPointsAllow = sum(OScore),
+              NumOT = sum(NumOT),
+              TotPos = sum(Poss),
+              TotFGM = sum(FGM),
+              TotFGA = sum(FGA),
+              TotFGM3 = sum(FGM3),
+              TotFGA3 = sum(FGA3),
+              TotFTM = sum(FTM),
+              TotFTA = sum(FTA),
+              TotOR = sum(OR),
+              TotDR = sum(DR),
+              TotAst = sum(Ast),
+              TotTO = sum(TO),
+              TotStl = sum(Stl),
+              TotBlk = sum(Blk),
+              TotPF = sum(PF),
+              TotPossAllow = sum(OPoss),
+              TotFGMAllow = sum(OFGM),
+              TotFGAAllow = sum(OFGA),
+              TotFGM3Allow = sum(OFGM3),
+              TotFGA3Allow = sum(OFGA3),
+              TotFTMAllow = sum(OFTM),
+              TotFTAAllow = sum(OFTA),
+              TotORAllow = sum(O_OR),
+              TotDRAllow = sum(ODR),
+              TotAstAllow = sum(OAst),
+              TotTOAllow = sum(OTO),
+              TotStlAllow = sum(OStl),
+              TotBlkAllow = sum(OBlk),
+              TotPFAllow = sum(OPF))
+  
+}
+
+## Store the results to a dataframe
+season_team_stats_tot <- reshape_detailed_results(reg_season_stats)
+
+## calculate win percentage
+season_team_stats_tot$WinPerc <- season_team_stats_tot$wins / season_team_stats_tot$GP
+
+
+
+#---------- Create a dataframe of season averages for each team ----------#
+
+# Next I will define a function that takes in the totals dataframe from the above function and calculate a season averages dataset.
+# this function also only requires one parameter to be passed to it, the totals dataframe.
+
+calculate_detailed_averages <- function(totals_dataframe) {
+  
+  averages <- totals_dataframe
+  
+  cols <- names(averages[,c(5:35)])
+  
+  for (eachcol in cols) {
+    averages[,eachcol] <- round(averages[,eachcol] / averages$GP,2)
+    
+  }
+  
+  averages <- averages %>%
+    rename(AvgPoints = TotPoints, AvgPointsAllow=TotPointsAllow, AvgOT=NumOT, AvgPoss=TotPos, AvgFGM=TotFGM,  AvgFGA=TotFGA, AvgFGM3=TotFGM3, AvgFGA3=TotFGA3, AvgFTM=TotFTM,
+           AvgFTA=TotFTA, AvgOR=TotOR, Avg_DR=TotDR, AvgAst=TotAst, AvgTO=TotTO, AvgStl=TotStl, Avg_Blk=TotBlk, AvgPF=TotPF, AvgPossAllow=TotPossAllow, AvgFGMAllow=TotFGMAllow, 
+           AvgFGAAllow=TotFGAAllow,  AvgFGM3Allow=TotFGM3Allow, AvgFGA3Allow=TotFGA3Allow,  AvgFTMAllow=TotFTMAllow, AvgFTAAllow=TotFTAAllow, 
+           AvgORAllow=TotORAllow, AvgDRAllow=TotDRAllow,  AvgAstAllow=TotAstAllow, AvgTOAllow=TotTOAllow, AvgStlAllow=TotStlAllow,  AvgBlkAllow=TotBlkAllow,
+           AvgPFAllow=TotPFAllow) %>%
+    mutate(PointsPerPoss = AvgPoints / AvgPoss,
+           PointsPerPossAllow = AvgPointsAllow / AvgPossAllow)
+  
+  return(averages)
+  
+}
+
+
+# create an averages dataframe
+season_team_stats_averages <- calculate_detailed_averages(season_team_stats_tot)
+
+
+```
+
+
+(1)Points per Game 
+
+The average points per game suffered a decline between 2010 and 2012, and then reached an all time high in 2013. 
+
+
+(2)Possessions per Game
+
+The Possessions per Game followed a similar trend as the Points per Game. This is expected since scoring is contigent on ball possession. It will be interesting to see if possessions goes up in the 2020 season after the shot clock has been shortened in certain situations.
+
+
+(3)Three Pointers Made and Attempted
+
+It’s a fairly well known trend that the average number of threes attempted and made has been steadily increasing over the years. This trend continued in the 2019 season. It will be interesting to see the 2020 data once released, as the NCAA instituted a change this season that pushed the three-point line back to the international distance.
+
+
+(4)Average Free Throws Made and Attempted
+
+The Average Free Throws Made and Attempted has been consistent over the years, but an upshoot in the numbers was seen in the 2013 season. This is not unusual since the same 2013 season recorded the highest number of Points per Game and Possessions per Game.
+
+
+(5)Average Assists
+
+The stats mirrored the typical upward trend of a stock in a stock exchange market. There are some dips, but overall, the average asssists per season has been on the rise.
+
+
+(6)Average Defensive Rebounds
+
+There are on average more defensive rebounds occurring. This could be attributed to the increase in field goals attempt over the years.
+
+
+```{r}
+
+a1 <- season_team_stats_averages %>%
+  group_by(Season) %>%
+  summarise(AvgPoints = mean(AvgPoints)) %>%
+  ggplot(aes(x= Season, y= AvgPoints, group = 1)) +
+  geom_line(color = plot_cols[2], size = 1) +
+  geom_point(size = 2, color = plot_cols[2]) +
+  labs(title = "Average Points \nPer Game") +
+  theme_akeem() +
+  theme(axis.title.y = element_blank())
+
+a2 <- season_team_stats_averages %>%
+  group_by(Season) %>%
+  summarise(AvgPoss = mean(AvgPoss)) %>%
+  ggplot(aes(x= Season, y= AvgPoss, group = 1)) +
+  geom_line(color = plot_cols[2], size = 1) +
+  geom_point(size = 2, color = plot_cols[2]) +
+  labs(title = "Average Possession \nPer season") +
+  theme_akeem() +
+  theme(axis.title.y = element_blank())
+
+a3 <- season_team_stats_averages %>% ungroup() %>%
+  select(Season, AvgFGA3, AvgFGM3) %>%
+  gather(key = "Stat", value = "Average", -Season) %>%
+  group_by(Season, Stat) %>%
+  summarise(Average = mean(Average)) %>%
+  ggplot(aes(x= Season, y= Average, group = Stat, colour = Stat)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  scale_color_manual(values = c(plot_cols[2], plot_cols[3])) +
+  labs(title = "Average threes \nmade & attempted") +
+  theme_akeem() +
+  theme(axis.title.y = element_blank())
+
+a4 <- season_team_stats_averages %>% ungroup() %>%
+  select(Season, AvgFTA, AvgFTM) %>%
+  gather(key = "Stat", value = "Average", -Season) %>%
+  group_by(Season, Stat) %>%
+  summarise(Average = mean(Average)) %>%
+  ggplot(aes(x= Season, y= Average, group = Stat, colour = Stat)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  scale_color_manual(values = c(plot_cols[2], plot_cols[3])) +
+  labs(title = "Free Throws \n Attempted") +
+  theme_akeem() +
+  theme(axis.title.y = element_blank())
+
+a5 <- season_team_stats_averages %>%
+  group_by(Season) %>%
+  summarise(AvgAst = mean(AvgAst)) %>%
+  ggplot(aes(x= Season, y= AvgAst, group = 1)) +
+  geom_point(size = 2, color = plot_cols[2]) +
+  geom_line(color = plot_cols[2], size = 1) +
+  labs(title = "Average Assists \nPer Season") +
+  theme_akeem() +
+  theme(axis.title.y = element_blank())
+
+a6 <- season_team_stats_averages %>% ungroup() %>%
+  select(Season, AvgOR, Avg_DR) %>%
+  gather(key = "Stat", value = "Average", -Season) %>%
+  group_by(Season, Stat) %>%
+  summarise(Average = mean(Average)) %>%
+  ggplot(aes(x= Season, y= Average, group = Stat, colour = Stat)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  scale_color_manual(values = c(plot_cols[2], plot_cols[3])) +
+  labs(title = "Defensive Rebounds") +
+  theme_akeem() +
+  theme(axis.title.y = element_blank())
+
+grid.arrange(a1, a2, a5, a3, a4, a6, ncol = 3)
+
+
+
+```
+
+
+
+## Tournament Vs Regular Season
+
+```{r}
+# create a variable to distinguish between the regular season and tournament stats
+reg_season_stats$Type <- "RegularSeason"
+tourney_stats$Type <- "Tournament"
+
+# join the regular season and tourney detailed stats
+joined_reg_tourney <- rbind(reg_season_stats, tourney_stats)
+```
+
+
+This section is focused on exploring the differences in the key statistics between regular season and tournament games for winning teams. It is expected that the players would be playing under different circumstances and the pressure would be different, depending on what is at stake.
+
+
+# Scoring Points
+
+The margins in the regular season games are higher than tournament games. This makes sense because tournaments are generally more competitive and are comprised of strong teams. Hence, the margins are usually tight.
+
+```{r}
+a <- joined_reg_tourney %>%
+  ggplot(aes(x= WScore, fill = Type)) +
+  geom_density(alpha = 0.5) +
+  scale_fill_manual(values = c(plot_cols[2], plot_cols[3])) +
+  ggtitle("POINTS & MARGINS IN THE TOURNEY vs REGULAR \nSEASON") +
+  labs(x= "Winning Team Score", y= "") +
+  theme_akeem() +
+  theme(legend.position = "top", legend.title = element_blank())
+
+b <- joined_reg_tourney %>%
+  mutate(Margin = WScore - LScore) %>%
+  ggplot(aes(x= Margin, fill = Type)) +
+  geom_density(alpha = 0.5) +
+  scale_fill_manual(values = c(plot_cols[2], plot_cols[3])) +
+  labs(y= "") +
+  theme_akeem() + 
+  theme(legend.position = "none")
+
+grid.arrange(a, b)
+```
+
+
+# Margins over the Years
+
+With the exception of 2011 and 2015 seasons, the rest of the seasons from 2010 to 2019 had significant difference in margins between regular and tournament games.
+
+```{r}
+joined_reg_tourney %>%
+  mutate(Margin = WScore - LScore) %>%
+  ggplot(aes(x= Margin, fill = Type)) +
+  geom_density(alpha = 0.5) +
+  scale_fill_manual(values = c(plot_cols[2], plot_cols[3])) +
+  ggtitle("MARGINS IN THE TOURNEY vs REGULAR SEASON \nOVER THE YEARS") +
+  labs(y= "") +
+  theme_akeem() + 
+  theme(legend.position = "top", legend.title = element_blank(), strip.text = element_text(face = "bold")) + 
+  facet_wrap(~ Season)
+```
+
+
+# Field Goals
+
+THe mean of Field Goals in tournament games is higher than regular season.
+
+```{r}
+
+a <- joined_reg_tourney %>%
+  ggplot(aes(x= WFGA, fill = Type)) +
+  geom_density(alpha = 0.5) +
+  scale_fill_manual(values = c(plot_cols[2], plot_cols[3])) +
+  ggtitle("FGA TOURNEY vs REGULAR SEASON", subtitle = "Field Goal Attempts by winning team in the regular \nseason and tourney roughly the same") +
+  labs(x= "Winning Team FG Attempted", y= "") +
+  theme_akeem() +
+  theme(legend.position = "top", legend.title = element_blank())
+
+b <- joined_reg_tourney %>%
+  ggplot(aes(x= WFGM, fill = Type)) +
+  geom_density(alpha = 0.5, adjust = 1.5) +
+  scale_fill_manual(values = c(plot_cols[2], plot_cols[3])) +
+  ggtitle("FGM TOURNEY vs REGULAR SEASON", subtitle = "Winning Team has more slightly more\nField Goals Made during the tourney") +
+  labs(x= "Winning Team FG Made", y= "") +
+  theme_akeem() +
+  theme(legend.position = "none")
+
+grid.arrange(a,b)
+
+
+```
+
+
+# Field Goals Attempt over the Years
+
+Going by the gaussian distribution of Field Goal Attempts (FGAs) over the years, Tournamemnt games had more FGAs over the years.
+
+```{r}
+joined_reg_tourney %>%
+  ggplot(aes(x= WFGA, fill = Type)) +
+  geom_density(alpha = 0.5) +
+  scale_fill_manual(values = c(plot_cols[2], plot_cols[3])) +
+  ggtitle("FGAs TOURNEY vs REGULAR SEASON OVER \nTHE YEARS") +
+  labs(x= "Winning Team FG Attempted", y= "") +
+  theme_akeem() +
+  theme(legend.position = "top", legend.title = element_blank(), strip.text = element_text(face = "bold")) +
+  facet_wrap(~ Season)
+```
+
+
+# Rebounds
+
+The offensive rebound chart suggested that there was no remarkable difference between regular season and tournament games. However, the mean and standard deviation of defensive rebounds in tournament games are higher than regular season games.
+
+```{r}
+a <- joined_reg_tourney %>%
+  ggplot(aes(x= WOR, fill = Type)) +
+  geom_density(alpha = 0.5, adjust = 1.5) +
+  scale_fill_manual(values = c(plot_cols[2], plot_cols[3])) +
+  ggtitle("OFFENSIVE REB: TOURNEY vs REGULAR SEASON") +
+  labs(x= "Winning Team Offensive Rebounds", y= "") +
+  theme_akeem() +
+  theme()
+
+b <- joined_reg_tourney %>%
+  ggplot(aes(x= WDR, fill = Type)) +
+  geom_density(alpha = 0.5, adjust = 1.5) +
+  scale_fill_manual(values = c(plot_cols[2], plot_cols[3])) +
+  ggtitle("DEFENSIVE REB: TOURNEY vs REGULAR SEASON") +
+  labs(x= "Winning Team Defensive Rebounds", y= "") +
+  theme_akeem(legend_pos = "none") +
+  theme()
+
+grid.arrange(a, b)  
+```
+
+
+Analysis is still in progress...
